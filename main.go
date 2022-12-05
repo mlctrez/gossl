@@ -60,6 +60,7 @@ func (s *Service) Start(_ service.Service) (err error) {
 				continue
 			}
 			endpointsByHost[host] = remoteUrl
+			s.Log().Infof("added host %s remote %s", host, remoteUrl)
 		}
 	}
 
@@ -134,7 +135,7 @@ func (s *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Service) hostPolicy(_ context.Context, host string) error {
-	if strings.HasSuffix(host, os.Getenv(EnvAcmeDomain)) {
+	if _, ok := endpointsByHost[host]; ok {
 		return nil
 	}
 	return fmt.Errorf("acme/autocert: host %q not configured in HostWhitelist", host)
