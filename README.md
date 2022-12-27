@@ -24,6 +24,10 @@ GO_SSL_TOKEN=LONG_UUID_NOT_EASILY_GUESSABLE
 GO_SSL_ENDPOINT_one_example_com=http://10.0.0.1:9000
 GO_SSL_ENDPOINT_two_example_com=http://10.0.0.2:9000
 
+# this environment variable indicates which host names can skip the token verification
+# i.e. strings.Contains(os.getEnv(SKIP_GO_SSL_TOKEN), hostName)
+SKIP_GO_SSL_TOKEN=two.example.com
+
 ```
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/mlctrez/gossl)](https://goreportcard.com/report/github.com/mlctrez/gossl)
