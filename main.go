@@ -26,9 +26,12 @@ const EnvAcmeDomain = "ACME_DOMAIN"
 const EnvGoSslToken = "GO_SSL_TOKEN"
 const EnvEndpointPrefix = "GO_SSL_ENDPOINT_"
 
+const EnvSkipGoSslToken = "SKIP_GO_SSL_TOKEN"
+
 const KeyGoSslToken = "go-ssl-token"
 
 var endpointsByHost = map[string]*url.URL{}
+var skipTokenHosts = os.Getenv(EnvSkipGoSslToken)
 
 func main() {
 	servicego.Run(&Service{})
@@ -63,6 +66,8 @@ func (s *Service) Start(_ service.Service) (err error) {
 			s.Log().Infof("added host %s remote %s", host, remoteUrl)
 		}
 	}
+
+	s.Log().Infof("skipTokenHosts = %q", skipTokenHosts)
 
 	var listener net.Listener
 	if listener, err = net.Listen("tcp4", os.Getenv(EnvAddress)); err != nil {
@@ -118,14 +123,28 @@ func (s *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	cook, err := request.Cookie(KeyGoSslToken)
-	if err == http.ErrNoCookie || cook.Value != os.Getenv(EnvGoSslToken) {
-		fmt.Println("DENIED", request.RemoteAddr, request.Host, request.RequestURI)
-		writer.WriteHeader(http.StatusUnauthorized)
-		return
+	var noPortHost = request.Host
+
+	if strings.Contains(noPortHost, ":") {
+		hostParts := strings.Split(noPortHost, ":")
+		noPortHost = hostParts[0]
 	}
 
-	if remoteUrl, ok := endpointsByHost[request.Host]; ok {
+	skipToken := strings.Contains(skipTokenHosts, noPortHost)
+
+	if !skipToken {
+		cook, err := request.Cookie(KeyGoSslToken)
+		if err == http.ErrNoCookie || cook.Value != os.Getenv(EnvGoSslToken) {
+			fmt.Println("DENIED", request.RemoteAddr, request.Host, request.RequestURI)
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+	}
+
+	remoteAddrParts := strings.Split(request.RemoteAddr, ":")
+	fmt.Println(remoteAddrParts[0], request.Method, request.Host, request.RequestURI)
+
+	if remoteUrl, ok := endpointsByHost[noPortHost]; ok {
 		proxy := httputil.NewSingleHostReverseProxy(remoteUrl)
 		request.Header.Set("X-HomeSsl-Forwarded", "true")
 		proxy.ServeHTTP(writer, request)
@@ -149,6 +168,7 @@ func (s *Service) TLSConfig() *tls.Config {
 		Cache:      autocert.DirCache(CertsDir),
 	}
 	tlsConfig := &tls.Config{
+		MinVersion:     tls.VersionTLS12,
 		NextProtos:     []string{"h2", "http/1.1", "acme-tls/1"},
 		GetCertificate: certManager.GetCertificate,
 	}
