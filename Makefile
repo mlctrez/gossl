@@ -4,7 +4,7 @@ HOST=optiplex
 
 build: main.go
 	mkdir -p temp
-	go build -o temp/$(NAME) main.go
+	CGO_ENABLED=0 go build -o temp/$(NAME) main.go
 
 copy: build
 	scp temp/$(NAME) $(HOST):/tmp/$(NAME)
