@@ -59,15 +59,15 @@ func (s *Service) Start(_ service.Service) (err error) {
 			host := strings.ReplaceAll(strings.TrimPrefix(parts[0], EnvEndpointPrefix), "_", ".")
 			remoteUrl, urlErr := url.Parse(parts[1])
 			if urlErr != nil || remoteUrl.Scheme == "" {
-				s.Log().Error("unable to parse", v)
+				s.Errorf("unable to parse %q", v)
 				continue
 			}
 			endpointsByHost[host] = remoteUrl
-			s.Log().Infof("added host %s remote %s", host, remoteUrl)
+			s.Infof("added host %s remote %s", host, remoteUrl)
 		}
 	}
 
-	s.Log().Infof("skipTokenHosts = %q", skipTokenHosts)
+	s.Infof("skipTokenHosts = %q", skipTokenHosts)
 
 	var listener net.Listener
 	if listener, err = net.Listen("tcp4", os.Getenv(EnvAddress)); err != nil {
@@ -80,8 +80,8 @@ func (s *Service) Start(_ service.Service) (err error) {
 
 	go func() {
 		serveErr := server.ServeTLS(listener, "", "")
-		if serveErr != nil && serveErr != http.ErrServerClosed {
-			_ = s.Log().Error(err)
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			s.Errorf("error serving https: %v", serveErr)
 		}
 	}()
 	return nil
@@ -100,7 +100,7 @@ func (s *Service) Stop(_ service.Service) (err error) {
 			os.Exit(-1)
 		}
 	} else {
-		_ = s.Log().Info("http.Server.Shutdown success")
+		s.Infof("http.Server.Shutdown success")
 	}
 	return
 }
@@ -134,15 +134,15 @@ func (s *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	if !skipToken {
 		cook, err := request.Cookie(KeyGoSslToken)
-		if err == http.ErrNoCookie || cook.Value != os.Getenv(EnvGoSslToken) {
-			fmt.Println("DENIED", request.RemoteAddr, request.Host, request.RequestURI)
+		if errors.Is(err, http.ErrNoCookie) || cook.Value != os.Getenv(EnvGoSslToken) {
+			s.Infof("DENIED %s %s %s", request.RemoteAddr, request.Host, request.RequestURI)
 			writer.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 	}
 
 	remoteAddrParts := strings.Split(request.RemoteAddr, ":")
-	fmt.Println(remoteAddrParts[0], request.Method, request.Host, request.RequestURI)
+	s.Infof("ALLOW %s %s %s %s", remoteAddrParts[0], remoteAddrParts[1], request.Host, request.RequestURI)
 
 	if remoteUrl, ok := endpointsByHost[noPortHost]; ok {
 		proxy := httputil.NewSingleHostReverseProxy(remoteUrl)
