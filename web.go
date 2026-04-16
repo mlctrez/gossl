@@ -10,7 +10,7 @@ import (
 	"github.com/mlctrez/servicego"
 )
 
-//go:embed templates/*.html static/*.css
+//go:embed templates/*.html static/*.css static/*.svg
 var webContent embed.FS
 
 // WebHandler handles the embedded web UI on the admin host.

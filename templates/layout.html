@@ -4,12 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{block "title" .}}gossl admin{{end}}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>gossl admin</h1>
+            <div class="header-brand">
+                <img src="/static/icon.svg" alt="gossl" class="header-icon" width="36" height="36">
+                <h1>gossl admin</h1>
+            </div>
         </header>
         <main>
             {{block "content" .}}{{end}}

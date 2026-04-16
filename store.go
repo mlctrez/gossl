@@ -5,12 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 )
-
-const EnvEndpointPrefix = "GO_SSL_ENDPOINT_"
-const EnvSkipGoSslToken = "SKIP_GO_SSL_TOKEN"
 
 // Endpoint represents a mapping from a hostname to a backend URL.
 type Endpoint struct {
@@ -27,7 +23,7 @@ type EndpointStore struct {
 }
 
 // NewEndpointStore creates an EndpointStore. If filePath exists on disk, it loads
-// from the file. Otherwise it migrates from environment variables and persists.
+// from the file. Otherwise it creates an empty store and persists it.
 func NewEndpointStore(filePath string) (*EndpointStore, error) {
 	s := &EndpointStore{filePath: filePath}
 
@@ -38,10 +34,7 @@ func NewEndpointStore(filePath string) (*EndpointStore, error) {
 		return s, nil
 	}
 
-	// File does not exist – migrate from env vars and save.
-	if err := s.migrateFromEnv(); err != nil {
-		return nil, err
-	}
+	// File does not exist – create empty store and save.
 	if err := s.save(); err != nil {
 		return nil, err
 	}
@@ -177,45 +170,5 @@ func (s *EndpointStore) load() error {
 		valid = append(valid, e)
 	}
 	s.endpoints = valid
-	return nil
-}
-
-// migrateFromEnv reads GO_SSL_ENDPOINT_* environment variables and converts
-// them to endpoint entries. Underscore hostnames are converted to dots.
-// The SKIP_GO_SSL_TOKEN env var is used to set the skipToken flag.
-func (s *EndpointStore) migrateFromEnv() error {
-	skipTokenHosts := os.Getenv(EnvSkipGoSslToken)
-
-	var endpoints []Endpoint
-	for _, v := range os.Environ() {
-		if !strings.HasPrefix(v, EnvEndpointPrefix) {
-			continue
-		}
-		eqIdx := strings.Index(v, "=")
-		if eqIdx < 0 {
-			continue
-		}
-		key := v[:eqIdx]
-		value := v[eqIdx+1:]
-
-		host := strings.ReplaceAll(strings.TrimPrefix(key, EnvEndpointPrefix), "_", ".")
-		if host == "" {
-			continue
-		}
-
-		u, err := url.Parse(value)
-		if err != nil || u.Scheme == "" {
-			continue
-		}
-
-		skipToken := strings.Contains(skipTokenHosts, host)
-
-		endpoints = append(endpoints, Endpoint{
-			Host:      host,
-			URL:       value,
-			SkipToken: skipToken,
-		})
-	}
-	s.endpoints = endpoints
 	return nil
 }

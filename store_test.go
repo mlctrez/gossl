@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -454,130 +453,6 @@ func TestProperty_InvalidURLRejection_EmptyHost(t *testing.T) {
 
 		if !reflect.DeepEqual(beforeMap, afterMap) {
 			t.Fatalf("store state changed after failed add:\n  before: %+v\n  after:  %+v", before, after)
-		}
-	})
-}
-
-// Feature: runtime-endpoint-api, Property 7: Migration produces correct endpoints from environment variables
-// **Validates: Requirements 6.3, 6.7**
-func TestProperty_Migration(t *testing.T) {
-	// Clear any pre-existing GO_SSL_ENDPOINT_* env vars so they don't interfere.
-	for _, v := range os.Environ() {
-		if strings.HasPrefix(v, EnvEndpointPrefix) {
-			key := v[:strings.Index(v, "=")]
-			t.Setenv(key, "") // records original value for restore
-			os.Unsetenv(key)
-		}
-	}
-	// Also clear SKIP_GO_SSL_TOKEN.
-	t.Setenv(EnvSkipGoSslToken, "")
-	os.Unsetenv(EnvSkipGoSslToken)
-
-	rapid.Check(t, func(t *rapid.T) {
-		// Generate 1-5 endpoint entries with underscore-separated hostname labels.
-		n := rapid.IntRange(1, 5).Draw(t, "endpointCount")
-
-		type envEntry struct {
-			labels []string // e.g. ["one", "example", "com"]
-			url    string
-		}
-
-		seenUnderscoreKeys := map[string]bool{}
-		var entries []envEntry
-
-		for i := 0; i < n; i++ {
-			// Generate 1-3 labels for the hostname.
-			labelCount := rapid.IntRange(1, 3).Draw(t, fmt.Sprintf("labelCount_%d", i))
-			labels := make([]string, labelCount)
-			for j := range labels {
-				labels[j] = rapid.StringMatching(`[a-z][a-z0-9]{0,9}`).Draw(t, fmt.Sprintf("label_%d_%d", i, j))
-			}
-			underscoreKey := strings.Join(labels, "_")
-			// Ensure unique underscore keys.
-			if seenUnderscoreKeys[underscoreKey] {
-				continue
-			}
-			seenUnderscoreKeys[underscoreKey] = true
-
-			backendURL := genURL(t)
-			entries = append(entries, envEntry{labels: labels, url: backendURL})
-		}
-
-		// Randomly select a subset of hosts to be in SKIP_GO_SSL_TOKEN.
-		var skipHosts []string
-		for _, e := range entries {
-			dotHost := strings.Join(e.labels, ".")
-			if rapid.Bool().Draw(t, fmt.Sprintf("skip_%s", dotHost)) {
-				skipHosts = append(skipHosts, dotHost)
-			}
-		}
-
-		// Set environment variables for this iteration.
-		var envKeys []string
-		for _, e := range entries {
-			envKey := EnvEndpointPrefix + strings.Join(e.labels, "_")
-			os.Setenv(envKey, e.url)
-			envKeys = append(envKeys, envKey)
-		}
-		if len(skipHosts) > 0 {
-			os.Setenv(EnvSkipGoSslToken, strings.Join(skipHosts, ","))
-		} else {
-			os.Setenv(EnvSkipGoSslToken, "")
-		}
-
-		// Clean up env vars at the end of this rapid iteration.
-		defer func() {
-			for _, k := range envKeys {
-				os.Unsetenv(k)
-			}
-			os.Unsetenv(EnvSkipGoSslToken)
-		}()
-
-		// Create a fresh store and run migration.
-		dir, dirErr := os.MkdirTemp("", "store-migration-*")
-		if dirErr != nil {
-			t.Fatalf("failed to create temp dir: %v", dirErr)
-		}
-		defer os.RemoveAll(dir)
-		filePath := filepath.Join(dir, "endpoints.json")
-
-		store := &EndpointStore{filePath: filePath}
-		if err := store.migrateFromEnv(); err != nil {
-			t.Fatalf("migrateFromEnv() failed: %v", err)
-		}
-
-		got := store.All()
-
-		// Build expected map from entries.
-		skipTokenValue := os.Getenv(EnvSkipGoSslToken)
-		expectedMap := make(map[string]Endpoint, len(entries))
-		for _, e := range entries {
-			dotHost := strings.Join(e.labels, ".")
-			expectedMap[dotHost] = Endpoint{
-				Host:      dotHost,
-				URL:       e.url,
-				SkipToken: strings.Contains(skipTokenValue, dotHost),
-			}
-		}
-
-		// Assert no extra endpoints.
-		if len(got) != len(expectedMap) {
-			t.Fatalf("endpoint count mismatch: expected %d, got %d\n  expected: %+v\n  got: %+v",
-				len(expectedMap), len(got), expectedMap, got)
-		}
-
-		// Assert each endpoint matches.
-		for _, g := range got {
-			e, ok := expectedMap[g.Host]
-			if !ok {
-				t.Fatalf("unexpected endpoint in store: %+v", g)
-			}
-			if g.URL != e.URL {
-				t.Fatalf("URL mismatch for host %q: expected %q, got %q", g.Host, e.URL, g.URL)
-			}
-			if g.SkipToken != e.SkipToken {
-				t.Fatalf("skipToken mismatch for host %q: expected %v, got %v", g.Host, e.SkipToken, g.SkipToken)
-			}
 		}
 	})
 }
