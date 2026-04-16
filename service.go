@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -61,7 +63,11 @@ func (s *Service) Start(_ service.Service) (err error) {
 		return
 	}
 
-	server := &http.Server{Handler: s, TLSConfig: s.TLSConfig()}
+	server := &http.Server{
+		Handler:   s,
+		TLSConfig: s.TLSConfig(),
+		ErrorLog:  log.New(&tlsHandshakeFilter{s: s}, "", 0),
+	}
 
 	s.serverShutdown = server.Shutdown
 
@@ -193,4 +199,21 @@ func (s *Service) TLSConfig() *tls.Config {
 		GetCertificate: certManager.GetCertificate,
 	}
 	return tlsConfig
+}
+
+// tlsHandshakeFilter is an io.Writer that suppresses noisy TLS handshake
+// errors from non-SNI clients while forwarding everything else.
+type tlsHandshakeFilter struct {
+	s *Service
+}
+
+var _ io.Writer = (*tlsHandshakeFilter)(nil)
+
+func (f *tlsHandshakeFilter) Write(p []byte) (n int, err error) {
+	msg := string(p)
+	if strings.Contains(msg, "TLS handshake error") {
+		return len(p), nil
+	}
+	f.s.Errorf("%s", strings.TrimSpace(msg))
+	return len(p), nil
 }
