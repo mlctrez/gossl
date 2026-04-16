@@ -1,0 +1,64 @@
+{{define "title"}}Endpoints - gossl admin{{end}}
+
+{{define "content"}}
+<section class="endpoints">
+    <h2>Endpoints</h2>
+
+    {{if .Error}}<div class="alert error">{{.Error}}</div>{{end}}
+    {{if .Warning}}<div class="alert warning">{{.Warning}}</div>{{end}}
+
+    <table>
+        <thead>
+            <tr>
+                <th>Hostname</th>
+                <th>Backend URL</th>
+                <th>Skip Token</th>
+                {{if .DNSEnabled}}<th>DNS Status</th>{{end}}
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Endpoints}}
+            <tr>
+                <td>{{.Host}}</td>
+                <td>{{.URL}}</td>
+                <td>{{if .SkipToken}}yes{{else}}no{{end}}</td>
+                {{if $.DNSEnabled}}<td>{{if .DNSRecord}}{{.DNSRecord.Type}} → {{.DNSRecord.Target}}{{else}}—{{end}}</td>{{end}}
+                <td class="actions">
+                    <form method="POST" action="/edit" class="inline-form">
+                        <input type="hidden" name="host" value="{{.Host}}">
+                        <input type="hidden" name="url" value="{{.URL}}">
+                        <input type="hidden" name="skipToken" value="{{.SkipToken}}">
+                        <button type="submit" class="btn btn-edit">Edit</button>
+                    </form>
+                    <form method="POST" action="/remove" class="inline-form" onsubmit="return confirm('Remove endpoint {{.Host}}?');">
+                        <input type="hidden" name="host" value="{{.Host}}">
+                        <button type="submit" class="btn btn-remove">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {{else}}
+            <tr><td colspan="{{if $.DNSEnabled}}5{{else}}4{{end}}" class="empty">No endpoints configured.</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+</section>
+
+<section class="add-endpoint">
+    <h2>{{if .EditHost}}Edit Endpoint{{else}}Add Endpoint{{end}}</h2>
+    <form method="POST" action="/add">
+        <div class="form-group">
+            <label for="host">Hostname</label>
+            <input type="text" id="host" name="host" value="{{.EditHost}}" {{if .EditHost}}readonly{{end}} required placeholder="app.example.com">
+        </div>
+        <div class="form-group">
+            <label for="url">Backend URL</label>
+            <input type="text" id="url" name="url" value="{{.EditURL}}" required placeholder="http://10.0.0.1:9000">
+        </div>
+        <div class="form-group checkbox">
+            <label><input type="checkbox" name="skipToken" value="true" {{if .EditSkipToken}}checked{{end}}> Skip token authentication</label>
+        </div>
+        <button type="submit" class="btn btn-add">{{if .EditHost}}Update{{else}}Add{{end}} Endpoint</button>
+    </form>
+</section>
+{{end}}

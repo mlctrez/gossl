@@ -2,9 +2,9 @@
 NAME=gossl
 HOST=optiplex
 
-build: main.go
+build:
 	mkdir -p temp
-	CGO_ENABLED=0 go build -o temp/$(NAME) main.go
+	CGO_ENABLED=0 go build -o temp/$(NAME) .
 
 copy: build
 	scp temp/$(NAME) $(HOST):/tmp/$(NAME)
