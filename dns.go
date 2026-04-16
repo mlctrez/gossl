@@ -124,7 +124,7 @@ func (c *Route53Client) LookupRecord(ctx context.Context, hostname string) (*DNS
 // Uses UPSERT to handle both creation and update cases.
 func (c *Route53Client) CreateCNAME(ctx context.Context, hostname string) error {
 	name := fqdn(hostname)
-	target := fqdn(c.cnameTarget)
+	target := strings.TrimSuffix(c.cnameTarget, ".")
 
 	_, err := c.client.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
 		HostedZoneId: aws.String(c.hostedZoneID),
@@ -174,7 +174,7 @@ func (c *Route53Client) RemoveCNAME(ctx context.Context, hostname string) error 
 	}
 
 	name := fqdn(hostname)
-	target := fqdn(c.cnameTarget)
+	target := strings.TrimSuffix(c.cnameTarget, ".")
 
 	_, err = c.client.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
 		HostedZoneId: aws.String(c.hostedZoneID),
