@@ -13,6 +13,7 @@
                 <th>Hostname</th>
                 <th>Backend URL</th>
                 <th>Skip Token</th>
+                <th>CloudFront</th>
                 {{if .DNSEnabled}}<th>DNS Status</th>{{end}}
                 <th>Actions</th>
             </tr>
@@ -23,12 +24,14 @@
                 <td>{{.Host}}</td>
                 <td>{{.URL}}</td>
                 <td>{{if .SkipToken}}yes{{else}}no{{end}}</td>
+                <td>{{if .RequireCloudFront}}yes{{else}}no{{end}}</td>
                 {{if $.DNSEnabled}}<td>{{if .DNSRecord}}{{.DNSRecord.Type}} → {{.DNSRecord.Target}}{{else}}—{{end}}</td>{{end}}
                 <td class="actions">
                     <form method="POST" action="/edit" class="inline-form">
                         <input type="hidden" name="host" value="{{.Host}}">
                         <input type="hidden" name="url" value="{{.URL}}">
                         <input type="hidden" name="skipToken" value="{{.SkipToken}}">
+                        <input type="hidden" name="requireCloudFront" value="{{.RequireCloudFront}}">
                         <button type="submit" class="btn btn-edit">Edit</button>
                     </form>
                     <form method="POST" action="/remove" class="inline-form" onsubmit="return confirm('Remove endpoint {{.Host}}?');">
@@ -38,7 +41,7 @@
                 </td>
             </tr>
             {{else}}
-            <tr><td colspan="{{if $.DNSEnabled}}5{{else}}4{{end}}" class="empty">No endpoints configured.</td></tr>
+            <tr><td colspan="{{if $.DNSEnabled}}6{{else}}5{{end}}" class="empty">No endpoints configured.</td></tr>
             {{end}}
         </tbody>
     </table>
@@ -57,6 +60,9 @@
         </div>
         <div class="form-group checkbox">
             <label><input type="checkbox" name="skipToken" value="true" {{if .EditSkipToken}}checked{{end}}> Skip token authentication</label>
+        </div>
+        <div class="form-group checkbox">
+            <label><input type="checkbox" name="requireCloudFront" value="true" {{if .EditRequireCloudFront}}checked{{end}}> Require CloudFront origin header</label>
         </div>
         <button type="submit" class="btn btn-add">{{if .EditHost}}Update{{else}}Add{{end}} Endpoint</button>
     </form>

@@ -10,9 +10,10 @@ import (
 
 // Endpoint represents a mapping from a hostname to a backend URL.
 type Endpoint struct {
-	Host      string `json:"host"`
-	URL       string `json:"url"`
-	SkipToken bool   `json:"skipToken,omitempty"`
+	Host              string `json:"host"`
+	URL               string `json:"url"`
+	SkipToken         bool   `json:"skipToken,omitempty"`
+	RequireCloudFront bool   `json:"requireCloudFront,omitempty"`
 }
 
 // EndpointStore provides thread-safe endpoint storage with JSON persistence.
@@ -73,6 +74,32 @@ func (s *EndpointStore) IsSkipToken(host string) bool {
 	for _, e := range s.endpoints {
 		if e.Host == host {
 			return e.SkipToken
+		}
+	}
+	return false
+}
+
+// RequiresCloudFront reports whether a host accepts only requests that carry
+// the CloudFront origin secret. Unknown hosts return false.
+func (s *EndpointStore) RequiresCloudFront(host string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.endpoints {
+		if e.Host == host {
+			return e.RequireCloudFront
+		}
+	}
+	return false
+}
+
+// AnyRequireCloudFront reports whether any stored endpoint opts into the
+// CloudFront origin check.
+func (s *EndpointStore) AnyRequireCloudFront() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.endpoints {
+		if e.RequireCloudFront {
+			return true
 		}
 	}
 	return false

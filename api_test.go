@@ -43,7 +43,7 @@ func TestAPI_GET_ReturnsAllEndpoints(t *testing.T) {
 	// Seed the store with some endpoints.
 	endpoints := []Endpoint{
 		{Host: "one.example.com", URL: "http://10.0.0.1:9000"},
-		{Host: "two.example.com", URL: "http://10.0.0.2:8080", SkipToken: true},
+		{Host: "two.example.com", URL: "http://10.0.0.2:8080", SkipToken: true, RequireCloudFront: true},
 	}
 	for _, ep := range endpoints {
 		if err := store.Add(ep); err != nil {
@@ -83,6 +83,9 @@ func TestAPI_GET_ReturnsAllEndpoints(t *testing.T) {
 		}
 		if actual.SkipToken != expected.SkipToken {
 			t.Fatalf("skipToken mismatch for %q: expected %v, got %v", expected.Host, expected.SkipToken, actual.SkipToken)
+		}
+		if actual.RequireCloudFront != expected.RequireCloudFront {
+			t.Fatalf("requireCloudFront mismatch for %q: expected %v, got %v", expected.Host, expected.RequireCloudFront, actual.RequireCloudFront)
 		}
 	}
 }
@@ -168,6 +171,43 @@ func TestAPI_POST_DuplicateHost_UpdatesEndpoint(t *testing.T) {
 	}
 	if !all[0].SkipToken {
 		t.Fatal("expected skipToken to be true after update")
+	}
+}
+
+func TestAPI_POST_RequireCloudFront_RoundTrip(t *testing.T) {
+	handler, store := newTestAPIHandler(t)
+
+	body := `{"host":"cf.example.com","url":"http://10.0.0.4:8080","skipToken":true,"requireCloudFront":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/endpoints", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+
+	resp := decodeJSON(t, rr)
+	if resp["requireCloudFront"] != true {
+		t.Fatalf("expected requireCloudFront true in response, got %v", resp["requireCloudFront"])
+	}
+	if _, ok := resp["cloudfrontHeader"]; ok {
+		t.Fatal("response included a header secret field")
+	}
+
+	all := store.All()
+	if len(all) != 1 || !all[0].RequireCloudFront || !all[0].SkipToken {
+		t.Fatalf("expected stored endpoint to keep both flags, got %+v", all)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/endpoints", nil)
+	getRR := httptest.NewRecorder()
+	handler.ServeHTTP(getRR, getReq)
+	var got []Endpoint
+	if err := json.NewDecoder(getRR.Body).Decode(&got); err != nil {
+		t.Fatalf("failed to decode list: %v", err)
+	}
+	if len(got) != 1 || !got[0].RequireCloudFront {
+		t.Fatalf("expected list to return requireCloudFront, got %+v", got)
 	}
 }
 

@@ -5,13 +5,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kardianos/service"
 )
 
 // newTestService creates a Service with a temp-backed EndpointStore containing
-// an "admin" endpoint so admin-host routing is active.
+// an admin host so admin-host routing is active.
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	dir := t.TempDir()
@@ -19,7 +20,7 @@ func newTestService(t *testing.T) *Service {
 
 	store := &EndpointStore{filePath: filePath}
 	// Add the admin endpoint so the store recognises the host.
-	if err := store.Add(Endpoint{Host: "admin", URL: "http://localhost:9999"}); err != nil {
+	if err := store.Add(Endpoint{Host: "admin.example.com", URL: "http://localhost:9999"}); err != nil {
 		t.Fatalf("failed to add admin endpoint: %v", err)
 	}
 
@@ -28,10 +29,10 @@ func newTestService(t *testing.T) *Service {
 	return svc
 }
 
-// adminRequest builds an HTTP request whose Host header is "admin".
+// adminRequest builds an HTTP request whose Host header is the admin host.
 func adminRequest(method, path string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
-	req.Host = "admin"
+	req.Host = "admin.example.com"
 	return req
 }
 
@@ -222,6 +223,326 @@ func TestNonAdminHost_SkipToken_Allowed(t *testing.T) {
 	// Should not be 401 — skipToken hosts bypass auth.
 	if rr.Code == http.StatusUnauthorized {
 		t.Fatalf("expected skipToken host to bypass auth, got 401")
+	}
+}
+
+// --- CloudFront origin header (X-Origin-Verify) ---
+
+func TestSecretMatches(t *testing.T) {
+	if !secretMatches("origin-secret", "origin-secret", "") {
+		t.Fatal("current secret should match")
+	}
+	if !secretMatches("old-secret", "new-secret", "old-secret") {
+		t.Fatal("previous secret should match")
+	}
+	if secretMatches("nope", "new-secret", "old-secret") {
+		t.Fatal("unrelated value should not match")
+	}
+	if secretMatches("short", "a-much-longer-secret", "") {
+		t.Fatal("different length should not match")
+	}
+	if !secretMatches("a-much-longer-secret", "a-much-longer-secret", "") {
+		t.Fatal("longer secret should match itself")
+	}
+	if secretMatches("x", "", "") || secretMatches("", "x", "") {
+		t.Fatal("empty configured secret should fail closed")
+	}
+	if !secretMatches("same", "same", "same") {
+		t.Fatal("value present as both secrets should match")
+	}
+}
+
+func TestRequireCloudFront_MissingHeader_Returns403(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+	called := false
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: backend.URL, SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "public.example.com"
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rr.Code)
+	}
+	if rr.Body.Len() != 0 {
+		t.Fatalf("expected empty body, got %q", rr.Body.String())
+	}
+	if called {
+		t.Fatal("backend was reached without the origin header")
+	}
+}
+
+func TestRequireCloudFront_WrongHeader_Returns403(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	t.Setenv(EnvCloudFrontHeaderValuePrevious, "old-secret")
+	svc := newTestService(t)
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: "http://127.0.0.1:9", SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "public.example.com"
+	req.Header.Set(HeaderOriginVerify, "nope")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rr.Code)
+	}
+}
+
+func TestRequireCloudFront_DuplicateHeader_Returns403(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: "http://127.0.0.1:9", SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "public.example.com"
+	req.Header.Add(HeaderOriginVerify, "origin-secret")
+	req.Header.Add(HeaderOriginVerify, "origin-secret")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for multiple header values, got %d", rr.Code)
+	}
+}
+
+func TestRequireCloudFront_UnsetSecret_Returns403(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "")
+	t.Setenv(EnvCloudFrontHeaderValuePrevious, "")
+	svc := newTestService(t)
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: "http://127.0.0.1:9", SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "public.example.com"
+	req.Header.Set(HeaderOriginVerify, "origin-secret")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when the secret is unset, got %d", rr.Code)
+	}
+}
+
+func TestRequireCloudFront_ValidHeader_ProxiesAndStripsSecret(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+
+	var gotOrigin, gotForwarded string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotOrigin = r.Header.Get(HeaderOriginVerify)
+		gotForwarded = r.Header.Get("X-HomeSsl-Forwarded")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: backend.URL, SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Host = "public.example.com:443"
+	req.Header.Set(HeaderOriginVerify, "origin-secret")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected backend status 204, got %d", rr.Code)
+	}
+	if gotOrigin != "" {
+		t.Fatalf("origin secret was forwarded: %q", gotOrigin)
+	}
+	if gotForwarded != "true" {
+		t.Fatalf("expected X-HomeSsl-Forwarded true, got %q", gotForwarded)
+	}
+}
+
+func TestRequireCloudFront_PreviousSecret_Proxies(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "new-secret")
+	t.Setenv(EnvCloudFrontHeaderValuePrevious, "old-secret")
+	svc := newTestService(t)
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: backend.URL, SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "public.example.com"
+	req.Header.Set(HeaderOriginVerify, "old-secret")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected previous secret to be accepted, got %d", rr.Code)
+	}
+}
+
+func TestRequireCloudFront_ValidHeaderStillRequiresCookie(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+	called := false
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	if err := svc.store.Add(Endpoint{
+		Host: "app.example.com", URL: backend.URL, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "app.example.com"
+	req.Header.Set(HeaderOriginVerify, "origin-secret")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 after a valid origin header when the cookie is missing, got %d", rr.Code)
+	}
+	if called {
+		t.Fatal("backend was reached without the cookie")
+	}
+
+	addTokenCookie(req, "secret-token")
+	rr = httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected proxy after cookie and origin header, got %d", rr.Code)
+	}
+	if !called {
+		t.Fatal("backend was not reached")
+	}
+}
+
+func TestRequireCloudFront_TokenPathRequiresHeader(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: "http://127.0.0.1:9", SkipToken: true, RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/secret-token", nil)
+	req.Host = "public.example.com"
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 on token path without origin header, got %d", rr.Code)
+	}
+	if rr.Header().Get("Set-Cookie") != "" {
+		t.Fatal("token cookie was set without the origin header")
+	}
+
+	req.Header.Set(HeaderOriginVerify, "origin-secret")
+	rr = httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307 on token path with origin header, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Header().Get("Set-Cookie"), KeyGoSslToken+"=secret-token") {
+		t.Fatalf("expected token cookie, got %q", rr.Header().Get("Set-Cookie"))
+	}
+}
+
+func TestRequireCloudFront_AdminHostIgnoresFlag(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+	if err := svc.store.Add(Endpoint{
+		Host: "admin.example.com", URL: "http://127.0.0.1:9", RequireCloudFront: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "admin.example.com"
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for admin without cookie, got %d", rr.Code)
+	}
+
+	addTokenCookie(req, "secret-token")
+	rr = httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+	if rr.Code == http.StatusForbidden || rr.Code == http.StatusUnauthorized {
+		t.Fatalf("admin with a valid cookie should not be blocked by the origin header, got %d", rr.Code)
+	}
+}
+
+func TestCloudFrontHeader_StrippedWhenNotRequired(t *testing.T) {
+	setTokenEnv(t, "secret-token")
+	t.Setenv(EnvCloudFrontHeaderValue, "origin-secret")
+	svc := newTestService(t)
+
+	var gotOrigin string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotOrigin = r.Header.Get(HeaderOriginVerify)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	if err := svc.store.Add(Endpoint{
+		Host: "public.example.com", URL: backend.URL, SkipToken: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "public.example.com"
+	req.Header.Set(HeaderOriginVerify, "origin-secret")
+	rr := httptest.NewRecorder()
+	svc.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rr.Code)
+	}
+	if gotOrigin != "" {
+		t.Fatalf("origin secret was forwarded on an unprotected host: %q", gotOrigin)
 	}
 }
 

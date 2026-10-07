@@ -92,9 +92,10 @@ func (h *APIHandler) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"host":      ep.Host,
-		"url":       ep.URL,
-		"skipToken": ep.SkipToken,
+		"host":              ep.Host,
+		"url":               ep.URL,
+		"skipToken":         ep.SkipToken,
+		"requireCloudFront": ep.RequireCloudFront,
 	}
 	if dnsWarning != "" {
 		resp["warning"] = dnsWarning

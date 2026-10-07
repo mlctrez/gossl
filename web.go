@@ -23,21 +23,23 @@ type WebHandler struct {
 
 // endpointView is the per-row view model for the endpoint list template.
 type endpointView struct {
-	Host      string
-	URL       string
-	SkipToken bool
-	DNSRecord *DNSRecord
+	Host              string
+	URL               string
+	SkipToken         bool
+	RequireCloudFront bool
+	DNSRecord         *DNSRecord
 }
 
 // pageData is the top-level data passed to the endpoints template.
 type pageData struct {
-	Endpoints     []endpointView
-	DNSEnabled    bool
-	Error         string
-	Warning       string
-	EditHost      string
-	EditURL       string
-	EditSkipToken bool
+	Endpoints             []endpointView
+	DNSEnabled            bool
+	Error                 string
+	Warning               string
+	EditHost              string
+	EditURL               string
+	EditSkipToken         bool
+	EditRequireCloudFront bool
 }
 
 // NewWebHandler creates a WebHandler with parsed embedded templates.
@@ -88,8 +90,9 @@ func (h *WebHandler) handleAdd(w http.ResponseWriter, r *http.Request) {
 	host := strings.TrimSpace(r.FormValue("host"))
 	backendURL := strings.TrimSpace(r.FormValue("url"))
 	skipToken := r.FormValue("skipToken") == "true"
+	requireCloudFront := r.FormValue("requireCloudFront") == "true"
 
-	ep := Endpoint{Host: host, URL: backendURL, SkipToken: skipToken}
+	ep := Endpoint{Host: host, URL: backendURL, SkipToken: skipToken, RequireCloudFront: requireCloudFront}
 
 	if err := h.store.Add(ep); err != nil {
 		h.renderPage(w, r, pageData{Error: err.Error()})
@@ -148,9 +151,10 @@ func (h *WebHandler) handleEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.renderPage(w, r, pageData{
-		EditHost:      r.FormValue("host"),
-		EditURL:       r.FormValue("url"),
-		EditSkipToken: r.FormValue("skipToken") == "true",
+		EditHost:              r.FormValue("host"),
+		EditURL:               r.FormValue("url"),
+		EditSkipToken:         r.FormValue("skipToken") == "true",
+		EditRequireCloudFront: r.FormValue("requireCloudFront") == "true",
 	})
 }
 
@@ -159,7 +163,7 @@ func (h *WebHandler) renderPage(w http.ResponseWriter, r *http.Request, data pag
 	endpoints := h.store.All()
 	views := make([]endpointView, len(endpoints))
 	for i, ep := range endpoints {
-		ev := endpointView{Host: ep.Host, URL: ep.URL, SkipToken: ep.SkipToken}
+		ev := endpointView{Host: ep.Host, URL: ep.URL, SkipToken: ep.SkipToken, RequireCloudFront: ep.RequireCloudFront}
 		if h.dnsClient != nil {
 			rec, err := h.dnsClient.LookupRecord(r.Context(), ep.Host)
 			if err == nil && rec != nil && rec.Exists {

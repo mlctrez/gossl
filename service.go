@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"errors"
@@ -26,6 +27,16 @@ const EnvAddress = "ADDRESS"
 const EnvAcmeDomain = "ACME_DOMAIN"
 const EnvGoSslToken = "GO_SSL_TOKEN"
 const KeyGoSslToken = "go-ssl-token"
+
+// HeaderOriginVerify is the CloudFront origin custom header. The name is fixed.
+// CloudFront overwrites any viewer-supplied value before the request reaches gossl.
+const HeaderOriginVerify = "X-Origin-Verify"
+
+// EnvCloudFrontHeaderValue is the current shared secret CloudFront sends.
+// EnvCloudFrontHeaderValuePrevious is accepted as well so a distribution
+// deploy can roll from the old value to the new one without a traffic gap.
+const EnvCloudFrontHeaderValue = "CLOUDFRONT_HEADER_VALUE"
+const EnvCloudFrontHeaderValuePrevious = "CLOUDFRONT_HEADER_VALUE_PREVIOUS"
 
 type Service struct {
 	servicego.Defaults
@@ -52,6 +63,10 @@ func (s *Service) Start(_ service.Service) (err error) {
 
 	for _, ep := range s.store.All() {
 		s.Infof("added host %s remote %s", ep.Host, ep.URL)
+	}
+
+	if s.store.AnyRequireCloudFront() && os.Getenv(EnvCloudFrontHeaderValue) == "" && os.Getenv(EnvCloudFrontHeaderValuePrevious) == "" {
+		s.Log().Warningf("%s is unset while one or more endpoints require the CloudFront origin header; those hosts will deny all traffic", EnvCloudFrontHeaderValue)
 	}
 
 	if rc := NewRoute53Client(s); rc != nil {
@@ -126,6 +141,16 @@ func (s *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Opted-in hosts accept a request only when CloudFront injected the origin
+	// secret. admin.* is handled above and stays on the cookie check alone.
+	// The token-setting path is included so the origin does not confirm the
+	// token URL without the header.
+	if s.store.RequiresCloudFront(noPortHost) && !s.validCloudFrontHeader(request) {
+		s.Infof("DENIED cloudfront %s %s %s", request.RemoteAddr, request.Host, request.RequestURI)
+		writer.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	// Token-setting path
 	if request.URL != nil && request.URL.Path == "/"+os.Getenv(EnvGoSslToken) {
 		s.setTokenCookie(writer)
@@ -148,10 +173,50 @@ func (s *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if remoteUrl, ok := s.store.Lookup(noPortHost); ok {
 		proxy := httputil.NewSingleHostReverseProxy(remoteUrl)
 		request.Header.Set("X-HomeSsl-Forwarded", "true")
+		// The origin secret must not reach the backend.
+		request.Header.Del(HeaderOriginVerify)
 		proxy.ServeHTTP(writer, request)
 		return
 	}
 	writer.WriteHeader(http.StatusNotFound)
+}
+
+// validCloudFrontHeader reports whether the request carries exactly one
+// X-Origin-Verify value matching the current or previous origin secret.
+// The header value is never logged. A missing secret fails closed.
+func (s *Service) validCloudFrontHeader(request *http.Request) bool {
+	values := request.Header.Values(HeaderOriginVerify)
+	presented := ""
+	if len(values) == 1 {
+		presented = values[0]
+	}
+	current := os.Getenv(EnvCloudFrontHeaderValue)
+	previous := os.Getenv(EnvCloudFrontHeaderValuePrevious)
+	if !secretMatches(presented, current, previous) {
+		return false
+	}
+	return len(values) == 1
+}
+
+// secretMatches compares presented with the configured secrets in constant time.
+// An empty configured secret never matches, so an unset environment fails closed.
+func secretMatches(presented, current, previous string) bool {
+	presentedHash := hashSecret(presented)
+	currentMatch := subtle.ConstantTimeCompare(presentedHash, hashSecret(current)) & secretConfigured(current)
+	previousMatch := subtle.ConstantTimeCompare(presentedHash, hashSecret(previous)) & secretConfigured(previous)
+	return (currentMatch | previousMatch) == 1
+}
+
+func hashSecret(v string) []byte {
+	sum := sha256.Sum256([]byte(v))
+	return sum[:]
+}
+
+func secretConfigured(v string) int {
+	if len(v) == 0 {
+		return 0
+	}
+	return 1
 }
 
 // validateToken checks the go-ssl-token cookie using constant-time comparison.

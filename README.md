@@ -21,6 +21,7 @@
 - Automatic TLS certificate provisioning and renewal (Let's Encrypt)
 - Reverse proxy with per-host backend routing
 - Token-based access control with per-host bypass option
+- Optional per-host CloudFront origin check via the `X-Origin-Verify` header
 - Web admin UI for managing endpoints at runtime
 - REST API for programmatic endpoint management
 - Optional Route53 DNS integration (automatic CNAME creation/removal)
@@ -78,6 +79,19 @@ gossl is configured through environment variables. When running as a system serv
 | `ACME_DOMAIN` | Domain used for the authentication cookie scope |
 | `GO_SSL_TOKEN` | Secret token for access control — use a long, random UUID |
 
+### Optional: CloudFront origin check
+
+When an endpoint has `requireCloudFront` set, gossl accepts a request for that host only if it carries the header `X-Origin-Verify` with the shared secret. Configure the same name and value as a CloudFront origin custom header. CloudFront overwrites a viewer-supplied value of that name. The header is removed before the request is proxied to the backend.
+
+The admin host is exempt and continues to use the token cookie.
+
+| Variable | Description |
+|---|---|
+| `CLOUDFRONT_HEADER_VALUE` | Current secret. Required for any endpoint that opts in. If it is unset, those hosts deny every request. |
+| `CLOUDFRONT_HEADER_VALUE_PREVIOUS` | Previous secret, accepted alongside the current one while a CloudFront distribution deploy propagates. |
+
+To rotate the secret, set the new value in `CLOUDFRONT_HEADER_VALUE` and the old value in `CLOUDFRONT_HEADER_VALUE_PREVIOUS`, restart gossl, then update the CloudFront origin custom header. After the distribution is deployed, clear the previous value and restart again.
+
 ### Optional: Route53 DNS Management
 
 When configured, gossl automatically creates and removes CNAME records when endpoints are added or removed through the admin interface.
@@ -113,7 +127,7 @@ curl -s https://admin.example.com/api/endpoints \
 curl -s -X POST https://admin.example.com/api/endpoints \
   -b "go-ssl-token=YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"host":"app.example.com","url":"http://10.0.0.1:9000","skipToken":false}'
+  -d '{"host":"app.example.com","url":"http://10.0.0.1:9000","skipToken":true,"requireCloudFront":true}'
 ```
 
 **Remove an endpoint**
@@ -132,6 +146,8 @@ Access is controlled by a secret token set in `GO_SSL_TOKEN`. To authenticate:
 
 Individual endpoints can bypass token validation by enabling "Skip Token" in the admin UI or setting `"skipToken": true` via the API.
 
+Individual endpoints can require the CloudFront origin header by enabling "Require CloudFront origin header" in the admin UI or setting `"requireCloudFront": true` via the API. A public service behind CloudFront uses both `"skipToken": true` and `"requireCloudFront": true`. The check runs before the token check and before the token-setting path. A missing header, a wrong value, more than one value, or an unset secret returns `403` with an empty body. The secret itself is never stored in `endpoints.json`.
+
 ## Architecture
 
 ```mermaid
@@ -141,7 +157,10 @@ flowchart LR
     tls --> route{"Host\nRouting"}
 
     route -->|"admin.*"| adminAuth["Token\nCheck"]
-    route -->|"other hosts"| proxyAuth{"Token\nCheck"}
+    route -->|"other hosts"| origin{"X-Origin-Verify\nwhen required"}
+
+    origin -->|"missing"| deny["403"]
+    origin -->|"ok"| proxyAuth{"Token\nCheck"}
 
     adminAuth -->|"/api/*"| api["REST API"]
     adminAuth -->|"/*"| web["Admin Web UI"]

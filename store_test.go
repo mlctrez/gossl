@@ -39,9 +39,10 @@ func genURL(t *rapid.T) string {
 // genEndpoint generates a valid Endpoint with unique host within a test case.
 func genEndpoint(t *rapid.T) Endpoint {
 	return Endpoint{
-		Host:      genHost(t),
-		URL:       genURL(t),
-		SkipToken: rapid.Bool().Draw(t, "skipToken"),
+		Host:              genHost(t),
+		URL:               genURL(t),
+		SkipToken:         rapid.Bool().Draw(t, "skipToken"),
+		RequireCloudFront: rapid.Bool().Draw(t, "requireCloudFront"),
 	}
 }
 
@@ -266,9 +267,10 @@ func TestProperty_UpdateOverwrites(t *testing.T) {
 
 		// Create a new endpoint with the same host but the new URL (and potentially different skipToken).
 		updated := Endpoint{
-			Host:      original.Host,
-			URL:       newURL,
-			SkipToken: rapid.Bool().Draw(t, "newSkipToken"),
+			Host:              original.Host,
+			URL:               newURL,
+			SkipToken:         rapid.Bool().Draw(t, "newSkipToken"),
+			RequireCloudFront: rapid.Bool().Draw(t, "newRequireCloudFront"),
 		}
 
 		// Add the updated endpoint to the store.
@@ -291,6 +293,9 @@ func TestProperty_UpdateOverwrites(t *testing.T) {
 		}
 		if got[0].SkipToken != updated.SkipToken {
 			t.Fatalf("skipToken mismatch: expected %v, got %v", updated.SkipToken, got[0].SkipToken)
+		}
+		if got[0].RequireCloudFront != updated.RequireCloudFront {
+			t.Fatalf("requireCloudFront mismatch: expected %v, got %v", updated.RequireCloudFront, got[0].RequireCloudFront)
 		}
 	})
 }
@@ -480,16 +485,17 @@ func TestProperty_LoadValidation(t *testing.T) {
 
 		// Build the full JSON array mixing valid and invalid entries.
 		type rawEntry struct {
-			Host      string `json:"host"`
-			URL       string `json:"url"`
-			SkipToken bool   `json:"skipToken,omitempty"`
+			Host              string `json:"host"`
+			URL               string `json:"url"`
+			SkipToken         bool   `json:"skipToken,omitempty"`
+			RequireCloudFront bool   `json:"requireCloudFront,omitempty"`
 		}
 
 		var allEntries []rawEntry
 
 		// Add valid entries.
 		for _, e := range validEntries {
-			allEntries = append(allEntries, rawEntry{Host: e.Host, URL: e.URL, SkipToken: e.SkipToken})
+			allEntries = append(allEntries, rawEntry{Host: e.Host, URL: e.URL, SkipToken: e.SkipToken, RequireCloudFront: e.RequireCloudFront})
 		}
 
 		// Generate invalid entries using different strategies.
@@ -571,6 +577,9 @@ func TestProperty_LoadValidation(t *testing.T) {
 			}
 			if g.SkipToken != e.SkipToken {
 				t.Fatalf("skipToken mismatch for host %q: expected %v, got %v", g.Host, e.SkipToken, g.SkipToken)
+			}
+			if g.RequireCloudFront != e.RequireCloudFront {
+				t.Fatalf("requireCloudFront mismatch for host %q: expected %v, got %v", g.Host, e.RequireCloudFront, g.RequireCloudFront)
 			}
 		}
 	})
