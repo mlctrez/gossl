@@ -1,6 +1,6 @@
 
 NAME=gossl
-HOST=optiplex
+HOST=dune
 
 build:
 	mkdir -p temp
